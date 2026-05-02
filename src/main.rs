@@ -3,7 +3,9 @@ mod domain;
 mod handlers;
 mod services;
 mod state;
+mod worker;
 
+use sea_orm::ConnectionTrait;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use whisper_rs::{WhisperContext, WhisperContextParameters};
@@ -18,8 +20,23 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Ensure models directory exists
+    // Ensure models and temp directories exist
     std::fs::create_dir_all("models")?;
+    
+    // DB setup
+    let db_conn = sea_orm::Database::connect("sqlite://jobs.db?mode=rwc").await?;
+
+    db_conn.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Sqlite,
+        "CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            progress INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+    ))
+    .await?;
 
     let model_path = "models/ggml-large-v3-turbo.bin";
 
@@ -43,7 +60,11 @@ async fn main() -> anyhow::Result<()> {
 
     let state = state::AppState {
         whisper_ctx: Arc::new(ctx),
+        db_conn,
     };
+
+    // Start worker thread
+    tokio::spawn(worker::start_worker(state.clone()));
 
     let app = api::create_router(state);
 
