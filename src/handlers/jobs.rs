@@ -24,7 +24,10 @@ pub async fn get_jobs_handler(
         .order_by_desc(JobColumn::CreatedAt)
         .all(&state.db_conn)
         .await
-        .map_err(|e| AppError::InternalError(anyhow::anyhow!("Failed to fetch jobs: {}", e)))?;
+        .map_err(|e| AppError::InternalError(anyhow::anyhow!("Failed to fetch jobs: {}", e)))?
+        .into_iter()
+        .map(Job::from)
+        .collect();
 
     Ok(Json(jobs))
 }
@@ -49,6 +52,7 @@ pub async fn get_job_handler(
         .one(&state.db_conn)
         .await
         .map_err(|e| AppError::InternalError(anyhow::anyhow!("Failed to fetch job: {}", e)))?
+        .map(Job::from)
         .ok_or_else(|| AppError::BadRequest("Job not found".to_string()))?;
 
     Ok(Json(job))
