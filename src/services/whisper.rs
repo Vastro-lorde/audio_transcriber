@@ -67,8 +67,14 @@ pub fn transcribe_audio_job(state: AppState, job_id: String) -> Result<(), AppEr
     params.set_print_timestamps(false);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<i32>();
+    let tx_clone = tx.clone();
     let conn_clone = state.db_conn.clone();
     let job_id_clone = job_id.clone();
+    
+    let abort_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let abort_flag_task = abort_flag.clone();
+    let abort_conn = state.db_conn.clone();
+    let abort_id = job_id.clone();
 
     // Spawn thread to handle DB updates to avoid blocking the C++ callback thread
     let db_task = std::thread::spawn(move || {
@@ -76,22 +82,52 @@ pub fn transcribe_audio_job(state: AppState, job_id: String) -> Result<(), AppEr
         rt.block_on(async move {
             use sea_orm::{EntityTrait, ActiveModelTrait, Set};
             use crate::domain::models::job::{Entity as JobEntity, ActiveModel as JobActiveModel};
+            
+            // Task to periodically check for cancellation
+            let cancel_checker = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if let Ok(Some(job)) = JobEntity::find_by_id(&abort_id).one(&abort_conn).await {
+                        if job.status == "cancelled" {
+                            abort_flag_task.store(true, std::sync::atomic::Ordering::Relaxed);
+                            break;
+                        } else if job.status == "completed" || job.status == "failed" {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            });
+
             while let Some(prog) = rx.recv().await {
+                if prog == -1 {
+                    break; // explicit termination signal
+                }
                 if let Some(j) = JobEntity::find_by_id(&job_id_clone).one(&conn_clone).await.unwrap_or(None) {
+                    if j.status == "cancelled" {
+                        break; // Stop updating progress if cancelled
+                    }
                     let mut am: JobActiveModel = j.into();
                     am.progress = Set(prog as i64);
                     let _ = am.update(&conn_clone).await;
                 }
             }
+            
+            cancel_checker.abort(); // cleanup the checker when done
         });
     });
 
     let mut last_progress = -1;
     params.set_progress_callback_safe(move |progress: i32| {
         if progress > last_progress {
-            let _ = tx.send(progress);
+            let _ = tx_clone.send(progress);
             last_progress = progress;
         }
+    });
+
+    params.set_abort_callback_safe(move || {
+        abort_flag.load(std::sync::atomic::Ordering::Relaxed)
     });
 
     let text_path_clone = text_output_path.clone();
@@ -108,12 +144,17 @@ pub fn transcribe_audio_job(state: AppState, job_id: String) -> Result<(), AppEr
         }
     });
 
-    whisper_state
-        .full(params, &samples)
-        .map_err(|e| AppError::WhisperError(format!("Inference failed: {}", e)))?;
+    let res = whisper_state.full(params, &samples);
+    
+    // Send termination signal to db_task
+    let _ = tx.send(-1);
+    
+    // Explicitly drop whisper_state and tx
+    drop(tx);
+    drop(whisper_state);
 
-    // The channel is closed when `params` is dropped here.
-    // However, `params` actually drops after `full()` executes, closing `tx`.
+    res.map_err(|e| AppError::WhisperError(format!("Inference failed: {}", e)))?;
+
     // Wait for the DB task to gracefully complete.
     let _ = db_task.join();
 

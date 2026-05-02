@@ -11,7 +11,10 @@ use std::io::Write;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-/// Transcribe an uploaded audio file (WAV, MP3, M4A, AAC, etc.).
+/// Upload an audio file to be transcribed by Whisper.
+///
+/// Supported formats include WAV, MP3, M4A, AAC, OGG, and FLAC. 
+/// The audio file will be queued for background processing. You can check the progress of the job using the returned Job ID.
 #[utoipa::path(
     post,
     path = "/transcribe",
@@ -71,6 +74,8 @@ pub async fn transcribe_handler(
         progress: Set(0),
         created_at: Set(now),
         updated_at: Set(now),
+        error_message: Set(None),
+        ..Default::default()
     };
 
     job_model.insert(&state.db_conn)
@@ -80,6 +85,7 @@ pub async fn transcribe_handler(
     Ok(Json(JobResponse {
         id: job_id,
         status: "pending".to_string(),
+        error_message: None,
     }))
 }
 

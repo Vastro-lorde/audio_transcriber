@@ -35,16 +35,33 @@ pub async fn start_worker(state: AppState) {
                 transcribe_audio_job(state_clone, job_id_clone)
             }).await;
 
-            let final_status = match res {
-                Ok(Ok(_)) => "completed",
-                _ => "failed",
+            let (final_status, error_msg) = match res {
+                Ok(Ok(_)) => ("completed", None),
+                Ok(Err(e)) => {
+                    tracing::error!("Job {} failed: {}", job.id, e);
+                    ("failed", Some(e.to_string()))
+                },
+                Err(e) => {
+                    tracing::error!("Job {} panicked: {}", job.id, e);
+                    ("failed", Some(format!("Task panicked: {}", e)))
+                },
             };
 
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
             // Update status
             if let Some(j) = JobEntity::find_by_id(&job.id).one(&conn).await.unwrap_or(None) {
+                // If it was cancelled by the user during processing, keep it cancelled
+                let actual_final_status = if j.status == "cancelled" {
+                    "cancelled"
+                } else {
+                    final_status
+                };
+
                 let mut am: JobActiveModel = j.into();
-                am.status = Set(final_status.to_string());
+                am.status = Set(actual_final_status.to_string());
+                if actual_final_status == "failed" {
+                    am.error_message = Set(error_msg);
+                }
                 am.updated_at = Set(now);
                 let _ = am.update(&conn).await;
             }

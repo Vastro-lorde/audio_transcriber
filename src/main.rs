@@ -33,10 +33,17 @@ async fn main() -> anyhow::Result<()> {
             status TEXT NOT NULL,
             progress INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            error_message TEXT
         )",
     ))
     .await?;
+
+    // Migration for existing tables
+    let _ = db_conn.execute(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Sqlite,
+        "ALTER TABLE jobs ADD COLUMN error_message TEXT"
+    )).await;
 
     let model_path = "models/ggml-large-v3-turbo.bin";
 

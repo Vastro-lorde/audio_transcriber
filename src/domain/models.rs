@@ -27,6 +27,7 @@ pub mod job {
         pub progress: i64,
         pub created_at: i64,
         pub updated_at: i64,
+        pub error_message: Option<String>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -42,6 +43,8 @@ pub struct Job {
     pub progress: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    #[schema(example = "File format not supported")]
+    pub error_message: Option<String>,
 }
 
 impl From<job::Model> for Job {
@@ -52,6 +55,7 @@ impl From<job::Model> for Job {
             progress: model.progress,
             created_at: model.created_at,
             updated_at: model.updated_at,
+            error_message: model.error_message,
         }
     }
 }
@@ -60,4 +64,6 @@ impl From<job::Model> for Job {
 pub struct JobResponse {
     pub id: String,
     pub status: String,
+    #[schema(example = "File format not supported")]
+    pub error_message: Option<String>,
 }
