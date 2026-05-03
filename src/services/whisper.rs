@@ -60,7 +60,7 @@ pub fn transcribe_audio_job(state: AppState, job_id: String) -> Result<(), AppEr
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(Some("en"));
-    params.set_n_threads(1); // Normal way, using 1 processor
+    params.set_n_threads(4); // Use 4 threads to prevent OOM while still being reasonably fast
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -126,9 +126,7 @@ pub fn transcribe_audio_job(state: AppState, job_id: String) -> Result<(), AppEr
         }
     });
 
-    params.set_abort_callback_safe(move || {
-        abort_flag.load(std::sync::atomic::Ordering::Relaxed)
-    });
+    // Removed abort callback to isolate -6 failure cause
 
     let text_path_clone = text_output_path.clone();
     params.set_segment_callback_safe_lossy(move |seg: whisper_rs::SegmentCallbackData| {
